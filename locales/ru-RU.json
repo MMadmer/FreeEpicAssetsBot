@@ -56,7 +56,8 @@
   "errors": {
     "permission_denied": "У вас нет прав для выполнения этой команды.",
     "guild_only": "Эту команду можно использовать только на сервере.",
-    "invalid_arguments": "Некорректные аргументы команды."
+    "invalid_arguments": "Некорректные аргументы команды.",
+    "unknown_command": "Команда `/{command}` устарела или больше не поддерживается. Используйте `/settings`, чтобы посмотреть текущий конфиг."
   },
   "subscribe": {
     "dm": {
@@ -64,8 +65,8 @@
       "success": "Подписка на обновления ассетов оформлена."
     },
     "channel": {
-      "already": "Для этого сервера уже включены уведомления с таким target.",
-      "success": "Уведомления об ассетах включены для target: {channel_name}"
+      "already": "Для этого сервера уже включены уведомления в этом канале или треде.",
+      "success": "Уведомления об ассетах включены: {channel_name}"
     }
   },
   "unsubscribe": {
@@ -103,7 +104,7 @@
     "thread": {
       "updated": "Тред уведомлений установлен: {target}.",
       "already": "Тред уведомлений уже установлен: {target}.",
-      "cleared": "Тред уведомлений очищен. Активный target: {target}.",
+      "cleared": "Тред уведомлений очищен. Активный канал: {target}.",
       "already_cleared": "Тред уведомлений не настроен.",
       "not_in_thread": "Запустите эту команду внутри треда, чтобы привязать уведомления к нему."
     },
@@ -117,31 +118,45 @@
       "current": "Изображения сейчас: {value}.",
       "updated": "Изображения теперь: {value}.",
       "already": "Изображения уже: {value}.",
-      "invalid": "Используйте `/assets images on` или `/assets images off`."
+      "invalid": "Используйте `/images on` или `/images off`."
     },
     "settings": {
       "header": "## Настройки уведомлений сервера",
       "not_configured": "Конфигурация сервера еще не создана.",
-      "hint": "Используйте `/assets sub`, `/assets set-channel` или `/assets set-thread`, чтобы настроить сервер.",
+      "hint": "Используйте `/sub`, `/set-channel` или `/set-thread`, чтобы настроить сервер.",
+      "status_not_configured": "не настроено",
       "enabled": "Статус: {value}",
       "channel": "Канал: {value}",
       "thread": "Тред: {value}",
       "role": "Роль для пинга: {value}",
       "locale": "Язык: {locale_name} ({locale_code})",
       "images": "Изображения: {value}",
-      "next_check": "Следующая проверка: {value}",
+      "next_check": "Следующая проверка через: {value}",
       "no_next_check": "еще не запланирована",
       "dm_not_configured": "Ваш DM-профиль еще не создан.",
       "dm_header": "## Настройки ассетов в личке",
-      "dm_status": "Статус: {value}"
+      "dm_status": "Статус: {value}",
+      "hints": {
+        "status_setup": "`/sub [channel]` создаст конфиг и сразу включит уведомления",
+        "status_enable": "`/enable` включит готовый конфиг",
+        "status_disable": "`/disable` выключит отправку, не удаляя конфиг",
+        "channel": "`/set-channel [channel]` изменит канал",
+        "thread_set": "`/set-thread [thread]` задаст тред, если он нужен",
+        "thread_clear": "`/clear-thread` уберет тред",
+        "role_set": "`/set-role @role` добавит пинг роли",
+        "role_clear": "`/clear-role` уберет пинг роли",
+        "images_enable": "`/images on` включит картинки",
+        "images_disable": "`/images off` выключит картинки",
+        "locale": "`/lang <locale>` изменит язык"
+      }
     },
     "test": {
-      "not_configured": "Конфигурация сервера не найдена. Сначала задайте канал или включите уведомления.",
-      "target_missing": "Не удалось найти настроенный target для уведомлений.",
-      "body": "Это тестовое уведомление для **{guild_name}**.",
-      "sent": "Тестовое уведомление отправлено в {target}.",
-      "failed": "Не удалось отправить тестовое уведомление: {error}",
-      "missing_permissions": "На target не хватает прав: {permissions}."
+      "not_configured": "Конфигурация сервера не найдена. Сначала задайте канал.",
+      "target_missing": "Не удалось найти настроенный канал или тред уведомлений.",
+      "body": "Это проверочное уведомление для **{guild_name}**.",
+      "sent": "Проверочное уведомление отправлено в {target}.",
+      "failed": "Не удалось отправить проверочное уведомление: {error}",
+      "missing_permissions": "В канале или треде не хватает прав: {permissions}."
     }
   },
   "locale": {

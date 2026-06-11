@@ -7,7 +7,7 @@ Discord bot that tracks current `Limited-Time Free` assets on Fab and posts upda
 ## Features
 
 - Daily Fab checks with change detection
-- Server-level notification config with explicit channel/thread target, role mention, enable/disable switch, and test command
+- Server-level notification config with explicit channel/thread routing, role mention, enable/disable switch, and delivery check command
 - Channel and DM subscriptions with backward-compatible aliases
 - Per-server language on servers and personal language in DMs
 - Built-in support for major world languages
@@ -39,21 +39,24 @@ Discord bot that tracks current `Limited-Time Free` assets on Fab and posts upda
 
 ## Commands
 
-- `/assets sub`: in DMs subscribes you, in servers enables updates and binds the current channel or thread
-- `/assets unsub`: in DMs unsubscribes you, in servers disables updates without deleting the server config
-- `/assets enable` / `/assets disable`: explicit server enable/disable controls
-- `/assets set-channel`: set the current channel as the notification channel
-- `/assets set-thread`: set the current thread as the notification target
-- `/assets clear-thread`: remove the thread target and fall back to the configured channel
-- `/assets set-role @role`: configure a role mention for notifications
-- `/assets clear-role`: remove the configured role mention
-- `/assets images <on|off>`: toggle image attachments for this server
-- `/assets settings`: show the current server or DM configuration
-- `/assets test`: send a test notification to the configured target
-- `/assets time`: show time left until the next check
-- `/assets lang <locale-code>`: in DMs changes your language, in servers changes the server notification language for admins only
+All commands are top-level slash commands. There is no `/assets` wrapper anymore. Server configuration commands require Administrator permissions; DM commands affect only the current user.
 
-Aliases preserved: `/assets locale`, `/assets l`, `/assets on`, `/assets off`, `/assets setchannel`, `/assets setthread`, `/assets clearthread`, `/assets setrole`, `/assets clearrole`, `/assets config`.
+- `/sub [channel]`: in DMs subscribes you to DM updates. In servers, creates or updates the server config, sets the selected channel/thread or current channel/thread, enables notifications immediately, and sends current assets once.
+- `/unsub`: in DMs unsubscribes you. In servers, disables sending without deleting the configured channel, thread, role, language, or image settings.
+- `/enable`: enables an existing server config. It does not choose a channel; if the config is incomplete or the bot lacks permissions, it explains what is missing.
+- `/disable`: disables server sending without deleting the server config.
+- `/set-channel [channel]`: sets the selected text/news channel, or the current channel if omitted. Also clears the configured thread.
+- `/set-thread [thread]`: sets the selected thread, or the current thread if omitted. Notifications are sent to that thread while it is configured.
+- `/clear-thread`: removes the configured thread and sends notifications back to the configured channel.
+- `/set-role @role`: mentions the selected role in server notifications.
+- `/clear-role`: removes the configured role mention.
+- `/images [on|off]`: shows or changes whether asset images are attached to server notifications.
+- `/settings`: shows the current DM or server configuration, including status, channel, thread, role, images, language, and next check time.
+- `/check [channel]`: sends a small delivery-check notification to the configured channel/thread, or to a temporary selected channel/thread without saving it. It does not send the current asset list.
+- `/time`: shows time left until the next scheduled check.
+- `/lang [locale-code]`: shows or changes the language. In servers, changing the language requires Administrator permissions.
+
+Slash commands are registered globally on startup with a full bulk overwrite, so global commands removed from this list are removed for every server after Discord propagates the update. Guild-scoped test commands are separate; if you created any for a test server, clear that guild with a guild command overwrite.
 
 ## Quick Start
 

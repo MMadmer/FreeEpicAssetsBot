@@ -56,7 +56,8 @@
   "errors": {
     "permission_denied": "You do not have the necessary permissions to run this command.",
     "guild_only": "This command can only be used in a server.",
-    "invalid_arguments": "Invalid command arguments."
+    "invalid_arguments": "Invalid command arguments.",
+    "unknown_command": "Command `/{command}` is outdated or no longer supported. Use `/settings` to view the current configuration."
   },
   "subscribe": {
     "dm": {
@@ -64,8 +65,8 @@
       "success": "Subscribed to asset updates."
     },
     "channel": {
-      "already": "This server is already subscribed for this target.",
-      "success": "Subscribed asset updates for target: {channel_name}"
+      "already": "This server is already subscribed in this channel or thread.",
+      "success": "Subscribed asset updates: {channel_name}"
     }
   },
   "unsubscribe": {
@@ -103,7 +104,7 @@
     "thread": {
       "updated": "Notification thread set to {target}.",
       "already": "Notification thread is already {target}.",
-      "cleared": "Notification thread cleared. Active target: {target}.",
+      "cleared": "Notification thread cleared. Active channel: {target}.",
       "already_cleared": "No notification thread is configured.",
       "not_in_thread": "Run this command inside a thread to bind notifications to it."
     },
@@ -117,31 +118,45 @@
       "current": "Images are currently {value}.",
       "updated": "Images are now {value}.",
       "already": "Images are already {value}.",
-      "invalid": "Use `/assets images on` or `/assets images off`."
+      "invalid": "Use `/images on` or `/images off`."
     },
     "settings": {
       "header": "## Server asset settings",
       "not_configured": "No server configuration has been created yet.",
-      "hint": "Use `/assets sub`, `/assets set-channel`, or `/assets set-thread` to configure this server.",
+      "hint": "Use `/sub`, `/set-channel`, or `/set-thread` to configure this server.",
+      "status_not_configured": "not configured",
       "enabled": "Status: {value}",
       "channel": "Channel: {value}",
       "thread": "Thread: {value}",
       "role": "Role mention: {value}",
       "locale": "Language: {locale_name} ({locale_code})",
       "images": "Images: {value}",
-      "next_check": "Next check: {value}",
+      "next_check": "Next check in: {value}",
       "no_next_check": "not scheduled yet",
       "dm_not_configured": "You do not have a DM profile yet.",
       "dm_header": "## DM asset settings",
-      "dm_status": "Status: {value}"
+      "dm_status": "Status: {value}",
+      "hints": {
+        "status_setup": "`/sub [channel]` creates the config and enables notifications immediately",
+        "status_enable": "`/enable` enables the ready config",
+        "status_disable": "`/disable` stops sending without deleting the config",
+        "channel": "`/set-channel [channel]` changes the channel",
+        "thread_set": "`/set-thread [thread]` sets a thread when needed",
+        "thread_clear": "`/clear-thread` removes the thread",
+        "role_set": "`/set-role @role` adds a role mention",
+        "role_clear": "`/clear-role` removes the role mention",
+        "images_enable": "`/images on` enables images",
+        "images_disable": "`/images off` disables images",
+        "locale": "`/lang <locale>` changes the language"
+      }
     },
     "test": {
-      "not_configured": "No server configuration found. Set a channel or enable updates first.",
-      "target_missing": "The configured notification target could not be resolved.",
-      "body": "This is a test notification for **{guild_name}**.",
-      "sent": "Test notification sent to {target}.",
-      "failed": "Failed to send test notification: {error}",
-      "missing_permissions": "Missing permissions on the target: {permissions}."
+      "not_configured": "No server configuration found. Set a channel first.",
+      "target_missing": "The configured notification channel or thread could not be resolved.",
+      "body": "This is a delivery check notification for **{guild_name}**.",
+      "sent": "Delivery check notification sent to {target}.",
+      "failed": "Failed to send delivery check notification: {error}",
+      "missing_permissions": "Missing permissions in the channel or thread: {permissions}."
     }
   },
   "locale": {

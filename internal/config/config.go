@@ -1,4 +1,4 @@
-﻿package config
+package config
 
 import (
 	"bytes"
@@ -15,7 +15,6 @@ import (
 
 const (
 	DefaultLocale  = "ru-RU"
-	CommandPrefix  = "/assets "
 	EnvBotToken    = "ASSETS_BOT_TOKEN"
 	EnvBotLocale   = "ASSETS_BOT_LOCALE"
 	EnvDataDir     = "ASSETS_BOT_DATA_DIR"
@@ -30,14 +29,13 @@ const (
 
 // Settings contains the runtime configuration resolved from the environment.
 type Settings struct {
-	ProjectRoot   string
-	Token         string
-	CommandPrefix string
-	Locale        string
-	DataDir       string
-	DatabaseURL   string
-	LocalesDir    string
-	LogPath       string
+	ProjectRoot string
+	Token       string
+	Locale      string
+	DataDir     string
+	DatabaseURL string
+	LocalesDir  string
+	LogPath     string
 }
 
 // Load resolves all runtime settings relative to projectRoot.
@@ -45,14 +43,13 @@ func Load(projectRoot string) Settings {
 	root := cleanProjectRoot(projectRoot)
 	dataDir := dataDir()
 	return Settings{
-		ProjectRoot:   root,
-		Token:         strings.TrimSpace(os.Getenv(EnvBotToken)),
-		CommandPrefix: CommandPrefix,
-		Locale:        envOrDefault(EnvBotLocale, DefaultLocale),
-		DataDir:       dataDir,
-		DatabaseURL:   databaseURL(dataDir),
-		LocalesDir:    filepath.Join(root, "locales"),
-		LogPath:       filepath.Join(root, DefaultLogName),
+		ProjectRoot: root,
+		Token:       strings.TrimSpace(os.Getenv(EnvBotToken)),
+		Locale:      envOrDefault(EnvBotLocale, DefaultLocale),
+		DataDir:     dataDir,
+		DatabaseURL: databaseURL(dataDir),
+		LocalesDir:  filepath.Join(root, "locales"),
+		LogPath:     filepath.Join(root, DefaultLogName),
 	}
 }
 

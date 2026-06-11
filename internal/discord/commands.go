@@ -8,40 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"epicassetsnotifybot/internal/i18n"
 	"epicassetsnotifybot/internal/model"
 
 	"github.com/bwmarrin/discordgo"
 )
 
-func (r *Runtime) onMessageCreate(_ *discordgo.Session, message *discordgo.MessageCreate) {
-	if message == nil || message.Author == nil || message.Author.Bot {
-		return
-	}
-	if !strings.HasPrefix(message.Content, r.settings.CommandPrefix) {
-		return
-	}
-
-	commandLine := strings.TrimSpace(strings.TrimPrefix(message.Content, r.settings.CommandPrefix))
-	if commandLine == "" {
-		return
-	}
-
-	fields := strings.Fields(commandLine)
-	if len(fields) == 0 {
-		return
-	}
-
-	command := strings.ToLower(fields[0])
-	args := fields[1:]
-
-	go func() {
-		if err := r.handleCommand(context.Background(), message, command, args); err != nil && !isContextDone(err) {
-			log.Printf("command %q failed: %v", command, err)
-		}
-	}()
-}
-
-func (r *Runtime) handleCommand(ctx context.Context, message *discordgo.MessageCreate, command string, args []string) error {
+func (r *Runtime) handleCommand(ctx context.Context, message *commandContext, command string, args []string) error {
 	switch command {
 	case "sub":
 		return r.handleSubscribe(ctx, message)
@@ -69,8 +42,8 @@ func (r *Runtime) handleCommand(ctx context.Context, message *discordgo.MessageC
 		return r.handleImages(message, mode)
 	case "settings", "config":
 		return r.handleSettings(message)
-	case "test":
-		return r.handleTest(message)
+	case "check":
+		return r.handleCheck(message)
 	case "time":
 		return r.handleTime(message)
 	case "lang", "locale", "l":
@@ -80,45 +53,46 @@ func (r *Runtime) handleCommand(ctx context.Context, message *discordgo.MessageC
 		}
 		return r.handleLang(message, locale)
 	default:
-		return nil
+		localizer := r.localizerForMessage(message)
+		return message.respond(r, localizer.T("errors.unknown_command", map[string]any{"command": command}))
 	}
 }
 
-func (r *Runtime) handleSubscribe(ctx context.Context, message *discordgo.MessageCreate) error {
+func (r *Runtime) handleSubscribe(ctx context.Context, message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if !r.isDM(message) && !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
 	if r.isDM(message) {
-		userID, _ := strconv.ParseInt(message.Author.ID, 10, 64)
+		userID, _ := strconv.ParseInt(message.author.ID, 10, 64)
 
 		r.mu.Lock()
 		profile := r.ensureUserProfileLocked(userID)
 		if profile.Subscribed {
 			r.mu.Unlock()
-			return r.respond(message.ChannelID, localizer.T("subscribe.dm.already", nil))
+			return message.respond(r, localizer.T("subscribe.dm.already", nil))
 		}
 		profile.Subscribed = true
 		profile.ShownAssets = false
 		r.markStateDirtyLocked()
 		r.mu.Unlock()
 
-		if err := r.respond(message.ChannelID, localizer.T("subscribe.dm.success", nil)); err != nil {
+		if err := message.respond(r, localizer.T("subscribe.dm.success", nil)); err != nil {
 			return err
 		}
-		log.Printf("User %s subscribed to asset updates.", message.Author.ID)
+		log.Printf("User %s subscribed to asset updates.", message.author.ID)
 		r.requestFlush()
 		r.sendCurrentAssetsToUser(ctx, userID)
 		return nil
 	}
 
-	channel, err := r.resolveChannelObject(message.ChannelID)
+	channel, err := r.commandTargetChannel(message)
 	if err != nil {
 		return err
 	}
 	channelID, threadID := currentTargetIDs(channel)
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	var cfgCopy model.GuildConfig
 	r.mu.Lock()
@@ -126,7 +100,7 @@ func (r *Runtime) handleSubscribe(ctx context.Context, message *discordgo.Messag
 	if cfg.Enabled && equalInt64Ptr(cfg.ChannelID, channelID) && equalInt64Ptr(cfg.ThreadID, threadID) {
 		cfgCopy = cloneGuildConfig(*cfg)
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("subscribe.channel.already", nil))
+		return message.respond(r, localizer.T("subscribe.channel.already", nil))
 	}
 	r.setGuildTarget(cfg, channelID, threadID)
 	cfg.Enabled = true
@@ -134,102 +108,115 @@ func (r *Runtime) handleSubscribe(ctx context.Context, message *discordgo.Messag
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("subscribe.channel.success", map[string]any{
+	if err := message.respond(r, localizer.T("subscribe.channel.success", map[string]any{
 		"channel_name": r.formatTargetLabel(cfgCopy, localizer),
 	})); err != nil {
 		return err
 	}
-	log.Printf("Guild %s subscribed via %s.", message.GuildID, r.formatTargetLabel(cfgCopy, localizer))
+	log.Printf("Guild %s subscribed via %s.", message.guildID, r.formatTargetLabel(cfgCopy, localizer))
 	r.requestFlush()
 	r.sendCurrentAssetsToGuild(ctx, guildID)
 	return nil
 }
 
-func (r *Runtime) handleUnsubscribe(message *discordgo.MessageCreate) error {
+func (r *Runtime) handleUnsubscribe(message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if !r.isDM(message) && !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
 	if r.isDM(message) {
-		userID, _ := strconv.ParseInt(message.Author.ID, 10, 64)
+		userID, _ := strconv.ParseInt(message.author.ID, 10, 64)
 
 		r.mu.Lock()
 		profile := r.userProfileLocked(userID)
 		if profile == nil || !profile.Subscribed {
 			r.mu.Unlock()
-			return r.respond(message.ChannelID, localizer.T("unsubscribe.dm.not_subscribed", nil))
+			return message.respond(r, localizer.T("unsubscribe.dm.not_subscribed", nil))
 		}
 		profile.Subscribed = false
 		profile.ShownAssets = false
 		r.markStateDirtyLocked()
 		r.mu.Unlock()
 
-		if err := r.respond(message.ChannelID, localizer.T("unsubscribe.success", nil)); err != nil {
+		if err := message.respond(r, localizer.T("unsubscribe.success", nil)); err != nil {
 			return err
 		}
-		log.Printf("User %s unsubscribed from asset updates.", message.Author.ID)
+		log.Printf("User %s unsubscribed from asset updates.", message.author.ID)
 		r.requestFlush()
 		return nil
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	r.mu.Lock()
 	cfg := r.guildConfigLocked(guildID)
 	if cfg == nil || !cfg.Enabled {
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("unsubscribe.channel.not_subscribed", nil))
+		return message.respond(r, localizer.T("unsubscribe.channel.not_subscribed", nil))
 	}
 	cfg.Enabled = false
 	cfg.ShownAssets = false
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("unsubscribe.success", nil)); err != nil {
+	if err := message.respond(r, localizer.T("unsubscribe.success", nil)); err != nil {
 		return err
 	}
-	log.Printf("Guild %s disabled asset updates.", message.GuildID)
+	log.Printf("Guild %s disabled asset updates.", message.guildID)
 	r.requestFlush()
 	return nil
 }
 
-func (r *Runtime) handleEnable(ctx context.Context, message *discordgo.MessageCreate) error {
+func (r *Runtime) handleEnable(ctx context.Context, message *commandContext) error {
 	if r.isDM(message) {
 		return r.handleSubscribe(ctx, message)
 	}
 
 	localizer := r.localizerForMessage(message)
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	channel, err := r.resolveChannelObject(message.ChannelID)
-	if err != nil {
-		return err
-	}
-	channelID, threadID := currentTargetIDs(channel)
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
-	var cfgCopy model.GuildConfig
-	r.mu.Lock()
-	cfg := r.ensureGuildConfigLocked(guildID)
-	if cfg.ChannelID == nil {
-		r.setGuildTarget(cfg, channelID, threadID)
+	r.mu.RLock()
+	cfg := r.guildConfigLocked(guildID)
+	if cfg == nil || cfg.ChannelID == nil {
+		r.mu.RUnlock()
+		return message.respond(r, strings.Join([]string{
+			localizer.T("server.settings.not_configured", nil),
+			localizer.T("server.settings.hint", nil),
+		}, "\n"))
 	}
-	if cfg.Enabled {
-		cfgCopy = cloneGuildConfig(*cfg)
-		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.enable.already", map[string]any{
+	cfgCopy := cloneGuildConfig(*cfg)
+	r.mu.RUnlock()
+
+	if validationError := r.validateGuildConfigForEnable(cfgCopy, localizer); validationError != "" {
+		return message.respond(r, validationError)
+	}
+
+	if cfgCopy.Enabled {
+		return message.respond(r, localizer.T("server.enable.already", map[string]any{
 			"target": r.formatTargetLabel(cfgCopy, localizer),
 		}))
+	}
+
+	r.mu.Lock()
+	cfg = r.guildConfigLocked(guildID)
+	if cfg == nil || cfg.ChannelID == nil {
+		r.mu.Unlock()
+		return message.respond(r, strings.Join([]string{
+			localizer.T("server.settings.not_configured", nil),
+			localizer.T("server.settings.hint", nil),
+		}, "\n"))
 	}
 	cfg.Enabled = true
 	cfgCopy = cloneGuildConfig(*cfg)
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.enable.success", map[string]any{
+	if err := message.respond(r, localizer.T("server.enable.success", map[string]any{
 		"target": r.formatTargetLabel(cfgCopy, localizer),
 	})); err != nil {
 		return err
@@ -239,51 +226,77 @@ func (r *Runtime) handleEnable(ctx context.Context, message *discordgo.MessageCr
 	return nil
 }
 
-func (r *Runtime) handleDisable(message *discordgo.MessageCreate) error {
+func (r *Runtime) validateGuildConfigForEnable(config model.GuildConfig, localizer *i18n.Localizer) string {
+	targetChannelID := r.targetChannelID(config)
+	if targetChannelID == "" {
+		return strings.Join([]string{
+			localizer.T("server.settings.not_configured", nil),
+			localizer.T("server.settings.hint", nil),
+		}, "\n")
+	}
+
+	channel, err := r.resolveChannelObject(targetChannelID)
+	if err != nil || channel == nil {
+		return strings.Join([]string{
+			localizer.T("server.test.target_missing", nil),
+			localizer.T("server.settings.hint", nil),
+		}, "\n")
+	}
+
+	missingPermissions := r.missingTargetPermissions(targetChannelID, config.IncludeImages)
+	if len(missingPermissions) > 0 {
+		return localizer.T("server.test.missing_permissions", map[string]any{
+			"permissions": strings.Join(missingPermissions, ", "),
+		})
+	}
+	return ""
+}
+
+func (r *Runtime) handleDisable(message *commandContext) error {
 	if r.isDM(message) {
 		return r.handleUnsubscribe(message)
 	}
 
 	localizer := r.localizerForMessage(message)
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	r.mu.Lock()
 	cfg := r.guildConfigLocked(guildID)
 	if cfg == nil || !cfg.Enabled {
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.disable.already", nil))
+		return message.respond(r, localizer.T("server.disable.already", nil))
 	}
 	cfg.Enabled = false
 	cfg.ShownAssets = false
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.disable.success", nil)); err != nil {
+	if err := message.respond(r, localizer.T("server.disable.success", nil)); err != nil {
 		return err
 	}
 	r.requestFlush()
 	return nil
 }
 
-func (r *Runtime) handleSetChannel(ctx context.Context, message *discordgo.MessageCreate) error {
+func (r *Runtime) handleSetChannel(ctx context.Context, message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	channel, err := r.resolveChannelObject(message.ChannelID)
+	channel, err := r.commandTargetChannel(message)
 	if err != nil {
 		return err
 	}
 	channelID, _ := currentTargetIDs(channel)
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	var cfgCopy model.GuildConfig
 	r.mu.Lock()
@@ -291,7 +304,7 @@ func (r *Runtime) handleSetChannel(ctx context.Context, message *discordgo.Messa
 	if !r.setGuildTarget(cfg, channelID, nil) {
 		cfgCopy = cloneGuildConfig(*cfg)
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.channel.already", map[string]any{
+		return message.respond(r, localizer.T("server.channel.already", map[string]any{
 			"target": r.formatTargetLabel(cfgCopy, localizer),
 		}))
 	}
@@ -299,7 +312,7 @@ func (r *Runtime) handleSetChannel(ctx context.Context, message *discordgo.Messa
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.channel.updated", map[string]any{
+	if err := message.respond(r, localizer.T("server.channel.updated", map[string]any{
 		"target": r.formatTargetLabel(cfgCopy, localizer),
 	})); err != nil {
 		return err
@@ -309,25 +322,25 @@ func (r *Runtime) handleSetChannel(ctx context.Context, message *discordgo.Messa
 	return nil
 }
 
-func (r *Runtime) handleSetThread(ctx context.Context, message *discordgo.MessageCreate) error {
+func (r *Runtime) handleSetThread(ctx context.Context, message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	channel, err := r.resolveChannelObject(message.ChannelID)
+	channel, err := r.commandTargetChannel(message)
 	if err != nil {
 		return err
 	}
 	if channel == nil || !isThreadChannel(channel.Type) {
-		return r.respond(message.ChannelID, localizer.T("server.thread.not_in_thread", nil))
+		return message.respond(r, localizer.T("server.thread.not_in_thread", nil))
 	}
 
 	channelID, threadID := currentTargetIDs(channel)
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	var cfgCopy model.GuildConfig
 	r.mu.Lock()
@@ -335,7 +348,7 @@ func (r *Runtime) handleSetThread(ctx context.Context, message *discordgo.Messag
 	if !r.setGuildTarget(cfg, channelID, threadID) {
 		cfgCopy = cloneGuildConfig(*cfg)
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.thread.already", map[string]any{
+		return message.respond(r, localizer.T("server.thread.already", map[string]any{
 			"target": r.formatTargetLabel(cfgCopy, localizer),
 		}))
 	}
@@ -343,7 +356,7 @@ func (r *Runtime) handleSetThread(ctx context.Context, message *discordgo.Messag
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.thread.updated", map[string]any{
+	if err := message.respond(r, localizer.T("server.thread.updated", map[string]any{
 		"target": r.formatTargetLabel(cfgCopy, localizer),
 	})); err != nil {
 		return err
@@ -353,30 +366,30 @@ func (r *Runtime) handleSetThread(ctx context.Context, message *discordgo.Messag
 	return nil
 }
 
-func (r *Runtime) handleClearThread(ctx context.Context, message *discordgo.MessageCreate) error {
+func (r *Runtime) handleClearThread(ctx context.Context, message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	var cfgCopy model.GuildConfig
 	r.mu.Lock()
 	cfg := r.guildConfigLocked(guildID)
 	if cfg == nil || cfg.ThreadID == nil {
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.thread.already_cleared", nil))
+		return message.respond(r, localizer.T("server.thread.already_cleared", nil))
 	}
 	r.setGuildTarget(cfg, cfg.ChannelID, nil)
 	cfgCopy = cloneGuildConfig(*cfg)
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.thread.cleared", map[string]any{
+	if err := message.respond(r, localizer.T("server.thread.cleared", map[string]any{
 		"target": r.formatTargetLabel(cfgCopy, localizer),
 	})); err != nil {
 		return err
@@ -386,27 +399,27 @@ func (r *Runtime) handleClearThread(ctx context.Context, message *discordgo.Mess
 	return nil
 }
 
-func (r *Runtime) handleSetRole(message *discordgo.MessageCreate) error {
+func (r *Runtime) handleSetRole(message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
 	roleID, ok := parseRoleID(message)
 	if !ok {
-		return r.respond(message.ChannelID, localizer.T("errors.invalid_arguments", nil))
+		return message.respond(r, localizer.T("errors.invalid_arguments", nil))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	r.mu.Lock()
 	cfg := r.ensureGuildConfigLocked(guildID)
 	if cfg.MentionRoleID != nil && *cfg.MentionRoleID == roleID {
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.role.already", map[string]any{
+		return message.respond(r, localizer.T("server.role.already", map[string]any{
 			"role": fmt.Sprintf("<@&%d>", roleID),
 		}))
 	}
@@ -414,7 +427,7 @@ func (r *Runtime) handleSetRole(message *discordgo.MessageCreate) error {
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.role.updated", map[string]any{
+	if err := message.respond(r, localizer.T("server.role.updated", map[string]any{
 		"role": fmt.Sprintf("<@&%d>", roleID),
 	})); err != nil {
 		return err
@@ -423,51 +436,51 @@ func (r *Runtime) handleSetRole(message *discordgo.MessageCreate) error {
 	return nil
 }
 
-func (r *Runtime) handleClearRole(message *discordgo.MessageCreate) error {
+func (r *Runtime) handleClearRole(message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	r.mu.Lock()
 	cfg := r.guildConfigLocked(guildID)
 	if cfg == nil || cfg.MentionRoleID == nil {
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.role.already_cleared", nil))
+		return message.respond(r, localizer.T("server.role.already_cleared", nil))
 	}
 	cfg.MentionRoleID = nil
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.role.cleared", nil)); err != nil {
+	if err := message.respond(r, localizer.T("server.role.cleared", nil)); err != nil {
 		return err
 	}
 	r.requestFlush()
 	return nil
 }
 
-func (r *Runtime) handleImages(message *discordgo.MessageCreate, mode string) error {
+func (r *Runtime) handleImages(message *commandContext, mode string) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 
 	r.mu.Lock()
 	cfg := r.ensureGuildConfigLocked(guildID)
 	if strings.TrimSpace(mode) == "" {
 		value := cfg.IncludeImages
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.images.current", map[string]any{
+		return message.respond(r, localizer.T("server.images.current", map[string]any{
 			"value": r.formatBoolLabel(value, localizer),
 		}))
 	}
@@ -479,12 +492,12 @@ func (r *Runtime) handleImages(message *discordgo.MessageCreate, mode string) er
 	includeImages, ok := modeMap[strings.ToLower(strings.TrimSpace(mode))]
 	if !ok {
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.images.invalid", nil))
+		return message.respond(r, localizer.T("server.images.invalid", nil))
 	}
 	if cfg.IncludeImages == includeImages {
 		current := cfg.IncludeImages
 		r.mu.Unlock()
-		return r.respond(message.ChannelID, localizer.T("server.images.already", map[string]any{
+		return message.respond(r, localizer.T("server.images.already", map[string]any{
 			"value": r.formatBoolLabel(current, localizer),
 		}))
 	}
@@ -493,7 +506,7 @@ func (r *Runtime) handleImages(message *discordgo.MessageCreate, mode string) er
 	r.markStateDirtyLocked()
 	r.mu.Unlock()
 
-	if err := r.respond(message.ChannelID, localizer.T("server.images.updated", map[string]any{
+	if err := message.respond(r, localizer.T("server.images.updated", map[string]any{
 		"value": r.formatBoolLabel(includeImages, localizer),
 	})); err != nil {
 		return err
@@ -502,22 +515,22 @@ func (r *Runtime) handleImages(message *discordgo.MessageCreate, mode string) er
 	return nil
 }
 
-func (r *Runtime) handleSettings(message *discordgo.MessageCreate) error {
+func (r *Runtime) handleSettings(message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		userID, _ := strconv.ParseInt(message.Author.ID, 10, 64)
+		userID, _ := strconv.ParseInt(message.author.ID, 10, 64)
 
 		r.mu.RLock()
 		profile := r.userProfiles[userID]
 		if profile == nil {
 			r.mu.RUnlock()
-			return r.respond(message.ChannelID, localizer.T("server.settings.dm_not_configured", nil))
+			return message.respond(r, localizer.T("server.settings.dm_not_configured", nil))
 		}
 		profileCopy := *profile
 		r.mu.RUnlock()
 
 		status := r.formatBoolLabel(profileCopy.Subscribed, localizer)
-		return r.respond(message.ChannelID, strings.Join([]string{
+		return message.respond(r, strings.Join([]string{
 			localizer.T("server.settings.dm_header", nil),
 			localizer.T("server.settings.dm_status", map[string]any{"value": status}),
 			localizer.T("server.settings.locale", map[string]any{
@@ -527,7 +540,7 @@ func (r *Runtime) handleSettings(message *discordgo.MessageCreate) error {
 		}, "\n"))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 	r.mu.RLock()
 	cfg := r.guildConfigs[guildID]
 	var cfgCopy *model.GuildConfig
@@ -537,73 +550,71 @@ func (r *Runtime) handleSettings(message *discordgo.MessageCreate) error {
 	}
 	r.mu.RUnlock()
 
-	return r.respond(message.ChannelID, r.settingsMessage(cfgCopy, localizer))
+	return message.respond(r, r.settingsMessage(cfgCopy, localizer))
 }
 
-func (r *Runtime) handleTest(message *discordgo.MessageCreate) error {
+func (r *Runtime) handleCheck(message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	if r.isDM(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.guild_only", nil))
+		return message.respond(r, localizer.T("errors.guild_only", nil))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 	r.mu.RLock()
 	cfg := r.guildConfigs[guildID]
-	if cfg == nil {
-		r.mu.RUnlock()
-		return r.respond(message.ChannelID, localizer.T("server.test.not_configured", nil))
+	cfgCopy := model.GuildConfig{
+		GuildID:       guildID,
+		Locale:        r.baseLocale,
+		IncludeImages: true,
 	}
-	cfgCopy := cloneGuildConfig(*cfg)
+	if cfg != nil {
+		cfgCopy = cloneGuildConfig(*cfg)
+	}
 	r.mu.RUnlock()
+
+	if cfg == nil && message.targetID == "" {
+		return message.respond(r, localizer.T("server.test.not_configured", nil))
+	}
+
+	if message.targetID != "" {
+		channel, err := r.commandTargetChannel(message)
+		if err != nil {
+			return err
+		}
+		channelID, threadID := currentTargetIDs(channel)
+		r.setGuildTarget(&cfgCopy, channelID, threadID)
+	}
 
 	targetChannelID := r.targetChannelID(cfgCopy)
 	if targetChannelID == "" {
-		return r.respond(message.ChannelID, localizer.T("server.test.target_missing", nil))
+		return message.respond(r, localizer.T("server.test.target_missing", nil))
 	}
 
-	missingPermissions := r.missingTargetPermissions(targetChannelID, cfgCopy.IncludeImages)
-	blocking := make([]string, 0, len(missingPermissions))
-	for _, permission := range missingPermissions {
-		if permission != "attach_files" {
-			blocking = append(blocking, permission)
-		}
-	}
-	if len(blocking) > 0 {
-		return r.respond(message.ChannelID, localizer.T("server.test.missing_permissions", map[string]any{
-			"permissions": strings.Join(blocking, ", "),
-		}))
+	if validationError := r.validateGuildConfigForEnable(cfgCopy, localizer); validationError != "" {
+		return message.respond(r, validationError)
 	}
 
-	guildName := message.GuildID
+	guildName := message.guildID
 	if r.session.State != nil {
-		if guild, err := r.session.State.Guild(message.GuildID); err == nil && guild != nil {
+		if guild, err := r.session.State.Guild(message.guildID); err == nil && guild != nil {
 			guildName = guild.Name
 		}
 	}
 	testBody := localizer.T("server.test.body", map[string]any{"guild_name": guildName})
 	if err := r.sendAssetMessage(targetChannelID, r.composeDeliveryContent(cfgCopy, testBody), nil); err != nil {
-		return r.respond(message.ChannelID, localizer.T("server.test.failed", map[string]any{"error": err.Error()}))
+		return message.respond(r, localizer.T("server.test.failed", map[string]any{"error": err.Error()}))
 	}
 
 	confirmation := localizer.T("server.test.sent", map[string]any{
 		"target": r.formatTargetLabel(cfgCopy, localizer),
 	})
-	for _, permission := range missingPermissions {
-		if permission == "attach_files" {
-			confirmation = strings.Join([]string{
-				confirmation,
-				localizer.T("server.test.missing_permissions", map[string]any{"permissions": "attach_files"}),
-			}, "\n")
-			break
-		}
-	}
-	return r.respond(message.ChannelID, confirmation)
+	return message.respond(r, confirmation)
 }
 
-func (r *Runtime) handleTime(message *discordgo.MessageCreate) error {
+func (r *Runtime) handleTime(message *commandContext) error {
 	localizer := r.localizerForMessage(message)
 	deleteHint := localizer.T("time.delete_hint", map[string]any{
 		"delete_after": int(r.deleteAfter.Seconds()),
@@ -622,7 +633,7 @@ func (r *Runtime) handleTime(message *discordgo.MessageCreate) error {
 		hours := totalSeconds / 3600
 		minutes := (totalSeconds % 3600) / 60
 		seconds := totalSeconds % 60
-		return r.sendTemporaryMessage(message.ChannelID, strings.Join([]string{
+		return message.respondTemporary(r, strings.Join([]string{
 			localizer.T("time.remaining", map[string]any{
 				"hours":   hours,
 				"minutes": minutes,
@@ -632,21 +643,21 @@ func (r *Runtime) handleTime(message *discordgo.MessageCreate) error {
 		}, "\n"))
 	}
 
-	return r.sendTemporaryMessage(message.ChannelID, strings.Join([]string{
+	return message.respondTemporary(r, strings.Join([]string{
 		localizer.T("time.no_schedule", nil),
 		deleteHint,
 	}, "\n"))
 }
 
-func (r *Runtime) handleLang(message *discordgo.MessageCreate, locale string) error {
+func (r *Runtime) handleLang(message *commandContext, locale string) error {
 	usage := r.localeUsage()
 	if r.isDM(message) {
-		userID, _ := strconv.ParseInt(message.Author.ID, 10, 64)
+		userID, _ := strconv.ParseInt(message.author.ID, 10, 64)
 		localizer := r.localizer.ForLocale(r.userLocale(userID))
 		currentLocale := r.userLocale(userID)
 
 		if strings.TrimSpace(locale) == "" {
-			return r.respond(message.ChannelID, strings.Join([]string{
+			return message.respond(r, strings.Join([]string{
 				localizer.T("locale.dm.current", map[string]any{
 					"locale_name": r.localizer.LocaleName(currentLocale),
 					"locale_code": currentLocale,
@@ -658,14 +669,14 @@ func (r *Runtime) handleLang(message *discordgo.MessageCreate, locale string) er
 
 		resolved := r.localizer.NormalizeLocale(locale)
 		if resolved == "" {
-			return r.respond(message.ChannelID, strings.Join([]string{
+			return message.respond(r, strings.Join([]string{
 				localizer.T("locale.invalid", map[string]any{"input_value": locale}),
 				localizer.T("locale.available", map[string]any{"locales": r.availableLocalesLabel()}),
 				localizer.T("locale.usage", map[string]any{"command": usage}),
 			}, "\n"))
 		}
 		if currentLocale == resolved {
-			return r.respond(message.ChannelID, localizer.T("locale.dm.already", map[string]any{
+			return message.respond(r, localizer.T("locale.dm.already", map[string]any{
 				"locale_name": r.localizer.LocaleName(resolved),
 				"locale_code": resolved,
 			}))
@@ -679,17 +690,17 @@ func (r *Runtime) handleLang(message *discordgo.MessageCreate, locale string) er
 		r.requestFlush()
 
 		newLocalizer := r.localizer.ForLocale(resolved)
-		return r.respond(message.ChannelID, newLocalizer.T("locale.dm.changed", map[string]any{
+		return message.respond(r, newLocalizer.T("locale.dm.changed", map[string]any{
 			"locale_name": r.localizer.LocaleName(resolved),
 			"locale_code": resolved,
 		}))
 	}
 
 	localizer := r.localizerForMessage(message)
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 	currentLocale := r.guildLocale(guildID)
 	if strings.TrimSpace(locale) == "" {
-		return r.respond(message.ChannelID, strings.Join([]string{
+		return message.respond(r, strings.Join([]string{
 			localizer.T("locale.server.current", map[string]any{
 				"locale_name": r.localizer.LocaleName(currentLocale),
 				"locale_code": currentLocale,
@@ -699,19 +710,19 @@ func (r *Runtime) handleLang(message *discordgo.MessageCreate, locale string) er
 		}, "\n"))
 	}
 	if !r.isAdmin(message) {
-		return r.respond(message.ChannelID, localizer.T("errors.permission_denied", nil))
+		return message.respond(r, localizer.T("errors.permission_denied", nil))
 	}
 
 	resolved := r.localizer.NormalizeLocale(locale)
 	if resolved == "" {
-		return r.respond(message.ChannelID, strings.Join([]string{
+		return message.respond(r, strings.Join([]string{
 			localizer.T("locale.invalid", map[string]any{"input_value": locale}),
 			localizer.T("locale.available", map[string]any{"locales": r.availableLocalesLabel()}),
 			localizer.T("locale.usage", map[string]any{"command": usage}),
 		}, "\n"))
 	}
 	if currentLocale == resolved {
-		return r.respond(message.ChannelID, localizer.T("locale.server.already", map[string]any{
+		return message.respond(r, localizer.T("locale.server.already", map[string]any{
 			"locale_name": r.localizer.LocaleName(resolved),
 			"locale_code": resolved,
 		}))
@@ -725,38 +736,41 @@ func (r *Runtime) handleLang(message *discordgo.MessageCreate, locale string) er
 	r.requestFlush()
 
 	newLocalizer := r.localizer.ForLocale(resolved)
-	return r.respond(message.ChannelID, newLocalizer.T("locale.server.changed", map[string]any{
+	return message.respond(r, newLocalizer.T("locale.server.changed", map[string]any{
 		"locale_name": r.localizer.LocaleName(resolved),
 		"locale_code": resolved,
 	}))
 }
 
-func (r *Runtime) respond(channelID, content string) error {
-	_, err := r.session.ChannelMessageSend(channelID, content)
-	return err
+func (r *Runtime) isDM(message *commandContext) bool {
+	return message.guildID == ""
 }
 
-func (r *Runtime) isDM(message *discordgo.MessageCreate) bool {
-	return message.GuildID == ""
+func (r *Runtime) commandTargetChannel(message *commandContext) (*discordgo.Channel, error) {
+	channelID := message.channelID
+	if message.targetID != "" {
+		channelID = message.targetID
+	}
+	return r.resolveChannelObject(channelID)
 }
 
-func (r *Runtime) isAdmin(message *discordgo.MessageCreate) bool {
-	if message == nil || message.Author == nil || message.GuildID == "" {
+func (r *Runtime) isAdmin(message *commandContext) bool {
+	if message == nil || message.author == nil || message.guildID == "" {
 		return false
 	}
 
-	if message.Member != nil && message.Member.Permissions&discordgo.PermissionAdministrator != 0 {
+	if message.member != nil && message.member.Permissions&discordgo.PermissionAdministrator != 0 {
 		return true
 	}
 
-	guild, err := r.resolveGuild(message.GuildID)
-	if err == nil && guild != nil && guild.OwnerID == message.Author.ID {
+	guild, err := r.resolveGuild(message.guildID)
+	if err == nil && guild != nil && guild.OwnerID == message.author.ID {
 		return true
 	}
 
-	member := message.Member
+	member := message.member
 	if member == nil {
-		member, _ = r.session.GuildMember(message.GuildID, message.Author.ID)
+		member, _ = r.session.GuildMember(message.guildID, message.author.ID)
 	}
 	if guild == nil || member == nil {
 		return false
@@ -804,16 +818,16 @@ func memberHasAdministrator(guild *discordgo.Guild, member *discordgo.Member) bo
 	return false
 }
 
-func parseRoleID(message *discordgo.MessageCreate) (int64, bool) {
+func parseRoleID(message *commandContext) (int64, bool) {
 	if message == nil {
 		return 0, false
 	}
-	if len(message.MentionRoles) > 0 {
-		roleID, err := strconv.ParseInt(message.MentionRoles[0], 10, 64)
+	if len(message.mentionRoles) > 0 {
+		roleID, err := strconv.ParseInt(message.mentionRoles[0], 10, 64)
 		return roleID, err == nil
 	}
 
-	fields := strings.Fields(strings.TrimSpace(message.Content))
+	fields := strings.Fields(strings.TrimSpace(message.content))
 	for _, field := range fields {
 		field = strings.TrimPrefix(field, "<@&")
 		field = strings.TrimSuffix(field, ">")

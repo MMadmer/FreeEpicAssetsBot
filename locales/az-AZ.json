@@ -56,7 +56,8 @@
   "errors": {
     "permission_denied": "Bu əmri icra etmək üçün lazımi icazəniz yoxdur.",
     "guild_only": "Bu əmr yalnız serverdə istifadə oluna bilər.",
-    "invalid_arguments": "Əmr arqumentləri yanlışdır."
+    "invalid_arguments": "Əmr arqumentləri yanlışdır.",
+    "unknown_command": "`/{command}` əmri köhnəlib və ya artıq dəstəklənmir. Cari konfiqurasiyaya baxmaq üçün `/settings` istifadə edin."
   },
   "subscribe": {
     "dm": {
@@ -64,8 +65,8 @@
       "success": "Asset yeniləmələri üçün abunə aktiv edildi."
     },
     "channel": {
-      "already": "Bu kanal artıq abunədir.",
-      "success": "Bu kanal üçün asset yeniləmələri abunəsi aktiv edildi: {channel_name}"
+      "already": "Bu server artıq bu kanalda və ya mövzuda abunədir.",
+      "success": "Asset yeniləmələrinə abunə olundu: {channel_name}"
     }
   },
   "unsubscribe": {
@@ -103,7 +104,7 @@
     "thread": {
       "updated": "Bildiriş thread-i {target} olaraq təyin edildi.",
       "already": "Bildiriş thread-i artıq {target}-dir.",
-      "cleared": "Bildiriş thread-i təmizləndi. Aktiv hədəf: {target}.",
+      "cleared": "Bildiriş mövzusu təmizləndi. Aktiv kanal: {target}.",
       "already_cleared": "Heç bir bildiriş thread-i qurulmayıb.",
       "not_in_thread": "Bildirişləri həmin thread-ə bağlamaq üçün bu əmri thread daxilində işlədin."
     },
@@ -117,31 +118,45 @@
       "current": "Şəkillər hazırda {value} vəziyyətindədir.",
       "updated": "Şəkillər indi {value} vəziyyətindədir.",
       "already": "Şəkillər artıq {value} vəziyyətindədir.",
-      "invalid": "`/assets images on` və ya `/assets images off` istifadə edin."
+      "invalid": "`/images on` və ya `/images off` istifadə edin."
     },
     "settings": {
       "header": "## Server asset ayarları",
       "not_configured": "Bu server üçün hələ konfiqurasiya yaradılmayıb.",
-      "hint": "Bu serveri qurmaq üçün `/assets sub`, `/assets set-channel` və ya `/assets set-thread` istifadə edin.",
+      "hint": "Bu serveri qurmaq üçün `/sub`, `/set-channel` və ya `/set-thread` istifadə edin.",
       "enabled": "Vəziyyət: {value}",
       "channel": "Kanal: {value}",
       "thread": "Thread: {value}",
       "role": "Rol mention-u: {value}",
       "locale": "Dil: {locale_name} ({locale_code})",
       "images": "Şəkillər: {value}",
-      "next_check": "Növbəti yoxlama: {value}",
+      "next_check": "Növbəti yoxlamaya qalan: {value}",
       "no_next_check": "hələ planlaşdırılmayıb",
       "dm_not_configured": "Sizin üçün hələ DM profili yaradılmayıb.",
       "dm_header": "## DM asset ayarları",
-      "dm_status": "Vəziyyət: {value}"
+      "dm_status": "Vəziyyət: {value}",
+      "status_not_configured": "qurulmayıb",
+      "hints": {
+        "status_setup": "`/sub [channel]` konfiqurasiyanı yaradır və bildirişləri dərhal aktiv edir",
+        "status_enable": "`/enable` hazır konfiqurasiyanı aktiv edir",
+        "status_disable": "`/disable` konfiqurasiyanı silmədən göndərişi dayandırır",
+        "channel": "`/set-channel [channel]` kanalı dəyişir",
+        "thread_set": "`/set-thread [thread]` lazım olduqda mövzu təyin edir",
+        "thread_clear": "`/clear-thread` mövzunu silir",
+        "role_set": "`/set-role @role` rol qeydini əlavə edir",
+        "role_clear": "`/clear-role` rol qeydini silir",
+        "images_enable": "`/images on` şəkilləri aktiv edir",
+        "images_disable": "`/images off` şəkilləri deaktiv edir",
+        "locale": "`/lang <locale>` dili dəyişir"
+      }
     },
     "test": {
-      "not_configured": "Server konfiqurasiyası tapılmadı. Əvvəlcə kanal təyin edin və ya yeniləmələri aktiv edin.",
-      "target_missing": "Qurulmuş bildiriş hədəfi tapılmadı.",
-      "body": "Bu, **{guild_name}** üçün test bildirişidir.",
-      "sent": "Test bildirişi {target} ünvanına göndərildi.",
-      "failed": "Test bildirişi göndərilə bilmədi: {error}",
-      "missing_permissions": "Hədəfdə çatışmayan icazələr: {permissions}."
+      "not_configured": "Server konfiqurasiyası tapılmadı. Əvvəlcə kanal seçin.",
+      "target_missing": "Qurulmuş bildiriş kanalı və ya mövzusu tapılmadı.",
+      "body": "Bu, **{guild_name}** üçün çatdırılma yoxlaması bildirişidir.",
+      "sent": "Çatdırılma yoxlaması bildirişi {target} kanalına göndərildi.",
+      "failed": "Çatdırılma yoxlaması bildirişi göndərilə bilmədi: {error}",
+      "missing_permissions": "Kanalda və ya mövzuda çatışmayan icazələr var: {permissions}."
     }
   },
   "locale": {
@@ -149,12 +164,6 @@
       "changed": "Şəxsi mesajlarda bot dili indi {locale_name} ({locale_code}) oldu.",
       "already": "Şəxsi mesajlarda bot dili artıq {locale_name} ({locale_code}) olaraq qurulub.",
       "current": "Cari şəxsi mesaj dili: {locale_name} ({locale_code})."
-    },
-    "channel": {
-      "changed": "Bu kanalda bot dili indi {locale_name} ({locale_code}) oldu.",
-      "already": "Bu kanalda bot dili artıq {locale_name} ({locale_code}) olaraq qurulub.",
-      "current": "Bu kanalın cari dili: {locale_name} ({locale_code}).",
-      "subscription_required": "Əvvəlcə bu kanalı yeniləmələrə abunə edin, sonra dilini dəyişin."
     },
     "server": {
       "changed": "Bu serverin dili indi {locale_name} ({locale_code})-dir.",

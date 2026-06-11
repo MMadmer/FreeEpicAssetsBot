@@ -108,10 +108,7 @@ func New(settings config.Settings, localizer *i18n.Localizer, store Store, scrap
 		return nil, fmt.Errorf("create discord session: %w", err)
 	}
 
-	session.Identify.Intents = discordgo.IntentsGuildMessages |
-		discordgo.IntentsDirectMessages |
-		discordgo.IntentsGuilds |
-		discordgo.IntentsMessageContent
+	session.Identify.Intents = discordgo.IntentsGuilds
 
 	baseLocale := localizer.NormalizeLocale(localizer.Locale())
 	if baseLocale == "" {
@@ -146,7 +143,7 @@ func New(settings config.Settings, localizer *i18n.Localizer, store Store, scrap
 		attachmentMaxBytes: 8 << 20,
 	}
 
-	session.AddHandler(runtime.onMessageCreate)
+	session.AddHandler(runtime.onInteractionCreate)
 	return runtime, nil
 }
 
@@ -178,6 +175,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 		return fmt.Errorf("open discord session: %w", err)
 	}
 	log.Printf("Logged in as %s", r.session.State.User.Username)
+	if err := r.registerApplicationCommands(); err != nil {
+		_ = r.session.Close()
+		_ = r.store.Close()
+		return err
+	}
 
 	if err := r.migrateLegacyServerConfigs(loopCtx); err != nil {
 		log.Printf("legacy server config migration failed: %v", err)
@@ -879,12 +881,12 @@ func (r *Runtime) userLocale(userID int64) string {
 	return r.baseLocale
 }
 
-func (r *Runtime) localizerForMessage(message *discordgo.MessageCreate) *i18n.Localizer {
-	if message.GuildID == "" {
-		userID, _ := strconv.ParseInt(message.Author.ID, 10, 64)
+func (r *Runtime) localizerForMessage(message *commandContext) *i18n.Localizer {
+	if message.guildID == "" {
+		userID, _ := strconv.ParseInt(message.author.ID, 10, 64)
 		return r.localizer.ForLocale(r.userLocale(userID))
 	}
-	guildID, _ := strconv.ParseInt(message.GuildID, 10, 64)
+	guildID, _ := strconv.ParseInt(message.guildID, 10, 64)
 	return r.localizer.ForLocale(r.guildLocale(guildID))
 }
 
@@ -1123,11 +1125,7 @@ func (r *Runtime) nextCheckLabel(localizer *i18n.Localizer) string {
 	hours := totalSeconds / 3600
 	minutes := (totalSeconds % 3600) / 60
 	seconds := totalSeconds % 60
-	return localizer.T("time.remaining", map[string]any{
-		"hours":   hours,
-		"minutes": minutes,
-		"seconds": seconds,
-	})
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, seconds)
 }
 
 func (r *Runtime) formatTargetLabel(cfg model.GuildConfig, localizer *i18n.Localizer) string {
@@ -1155,39 +1153,115 @@ func (r *Runtime) formatBoolLabel(value bool, localizer *i18n.Localizer) string 
 }
 
 func (r *Runtime) settingsMessage(cfg *model.GuildConfig, localizer *i18n.Localizer) string {
+	effective := model.GuildConfig{
+		Locale:        r.baseLocale,
+		IncludeImages: true,
+	}
 	if cfg == nil {
-		return strings.Join([]string{
-			localizer.T("server.settings.not_configured", nil),
-			localizer.T("server.settings.hint", nil),
-		}, "\n")
+		effective.Enabled = false
+	} else {
+		effective = *cfg
 	}
 
 	channelValue := localizer.T("server.target.none", nil)
-	if cfg.ChannelID != nil {
-		channelValue = localizer.T("server.target.channel", map[string]any{"channel_id": *cfg.ChannelID})
+	if effective.ChannelID != nil {
+		channelValue = localizer.T("server.target.channel", map[string]any{"channel_id": *effective.ChannelID})
 	}
 	threadValue := localizer.T("server.target.none", nil)
-	if cfg.ThreadID != nil {
-		threadValue = localizer.T("server.target.thread", map[string]any{"thread_id": *cfg.ThreadID})
+	if effective.ThreadID != nil {
+		threadValue = localizer.T("server.target.thread", map[string]any{"thread_id": *effective.ThreadID})
 	}
 
 	return strings.Join([]string{
 		localizer.T("server.settings.header", nil),
-		localizer.T("server.settings.enabled", map[string]any{"value": r.formatBoolLabel(cfg.Enabled, localizer)}),
-		localizer.T("server.settings.channel", map[string]any{"value": channelValue}),
-		localizer.T("server.settings.thread", map[string]any{"value": threadValue}),
-		localizer.T("server.settings.role", map[string]any{"value": r.formatRoleLabel(*cfg, localizer)}),
-		localizer.T("server.settings.locale", map[string]any{
-			"locale_name": r.localizer.LocaleName(cfg.Locale),
-			"locale_code": cfg.Locale,
-		}),
-		localizer.T("server.settings.images", map[string]any{
-			"value": r.formatBoolLabel(cfg.IncludeImages, localizer),
-		}),
+		r.settingsLine(
+			localizer.T("server.settings.enabled", map[string]any{
+				"value": r.settingsStatusLabel(cfg, effective, localizer),
+			}),
+			r.settingsStatusHint(cfg, effective, localizer),
+		),
+		r.settingsLine(
+			localizer.T("server.settings.channel", map[string]any{"value": channelValue}),
+			localizer.T("server.settings.hints.channel", nil),
+		),
+		r.settingsLine(
+			localizer.T("server.settings.thread", map[string]any{"value": threadValue}),
+			r.settingsThreadHint(effective, localizer),
+		),
+		r.settingsLine(
+			localizer.T("server.settings.role", map[string]any{"value": r.formatRoleLabel(effective, localizer)}),
+			r.settingsRoleHint(effective, localizer),
+		),
+		r.settingsLine(
+			localizer.T("server.settings.images", map[string]any{
+				"value": r.formatBoolLabel(effective.IncludeImages, localizer),
+			}),
+			r.settingsImagesHint(effective, localizer),
+		),
+		r.settingsLine(
+			localizer.T("server.settings.locale", map[string]any{
+				"locale_name": r.localizer.LocaleName(effective.Locale),
+				"locale_code": effective.Locale,
+			}),
+			localizer.T("server.settings.hints.locale", nil),
+		),
 		localizer.T("server.settings.next_check", map[string]any{
 			"value": r.nextCheckLabel(localizer),
 		}),
 	}, "\n")
+}
+
+func (r *Runtime) settingsLine(value string, hint string) string {
+	if strings.TrimSpace(hint) == "" {
+		return value
+	}
+	return fmt.Sprintf("%s - %s", value, hint)
+}
+
+func (r *Runtime) settingsStatusLabel(
+	cfg *model.GuildConfig,
+	effective model.GuildConfig,
+	localizer *i18n.Localizer,
+) string {
+	if cfg == nil {
+		return localizer.T("server.settings.status_not_configured", nil)
+	}
+	return r.formatBoolLabel(effective.Enabled, localizer)
+}
+
+func (r *Runtime) settingsStatusHint(
+	cfg *model.GuildConfig,
+	effective model.GuildConfig,
+	localizer *i18n.Localizer,
+) string {
+	if cfg == nil || effective.ChannelID == nil {
+		return localizer.T("server.settings.hints.status_setup", nil)
+	}
+	if effective.Enabled {
+		return localizer.T("server.settings.hints.status_disable", nil)
+	}
+	return localizer.T("server.settings.hints.status_enable", nil)
+}
+
+func (r *Runtime) settingsThreadHint(effective model.GuildConfig, localizer *i18n.Localizer) string {
+	if effective.ThreadID == nil {
+		return localizer.T("server.settings.hints.thread_set", nil)
+	}
+	return localizer.T("server.settings.hints.thread_clear", nil)
+}
+
+func (r *Runtime) settingsRoleHint(effective model.GuildConfig, localizer *i18n.Localizer) string {
+	if effective.MentionRoleID == nil {
+		return localizer.T("server.settings.hints.role_set", nil)
+	}
+	return localizer.T("server.settings.hints.role_clear", nil)
+}
+
+func (r *Runtime) settingsImagesHint(effective model.GuildConfig, localizer *i18n.Localizer) string {
+	if effective.IncludeImages {
+		return localizer.T("server.settings.hints.images_disable", nil)
+	}
+	return localizer.T("server.settings.hints.images_enable", nil)
 }
 
 func (r *Runtime) availableLocalesLabel() string {
@@ -1235,7 +1309,7 @@ func (r *Runtime) localeChoices() []string {
 }
 
 func (r *Runtime) localeUsage() string {
-	return fmt.Sprintf("%slang <%s>", r.settings.CommandPrefix, strings.Join(r.localeChoices(), "|"))
+	return fmt.Sprintf("/lang <%s>", strings.Join(r.localeChoices(), "|"))
 }
 
 func (r *Runtime) missingTargetPermissions(channelID string, includeImages bool) []string {

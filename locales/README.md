@@ -14,5 +14,5 @@ Notes:
 - `calendar.months.standalone` is used for headers like "Мартовские ассеты".
 - `calendar.months.format` is used inside date phrases like "до 9 сентября".
 - Missing keys fall back to `ru-RU.json`.
-- Users can override the default locale for themselves with `/assets lang`.
+- Users can override the default locale for themselves with `/lang`.
 - The repo currently ships with Arabic, Azerbaijani, Bengali, English, French, Georgian, German, Hindi, Japanese, Korean, Polish, Portuguese, Russian, Simplified Chinese, Spanish, Turkish, Ukrainian, and Urdu.
